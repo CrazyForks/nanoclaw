@@ -27,6 +27,8 @@ export interface SchedulerDependencies {
   getSessions: () => Record<string, string>;
   queue: GroupQueue;
   onProcess: (groupJid: string, proc: ChildProcess, containerName: string, groupFolder: string) => void;
+  sendMessage: (jid: string, text: string) => Promise<void>;
+  assistantName: string;
 }
 
 async function runTask(
@@ -118,6 +120,11 @@ async function runTask(
 
         if (streamedOutput.result) {
           result = streamedOutput.result;
+          // Forward result to user (strip <internal> tags)
+          const text = streamedOutput.result.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+          if (text) {
+            await deps.sendMessage(task.chat_jid, `${deps.assistantName}: ${text}`);
+          }
         }
         if (streamedOutput.status === 'error') {
           error = streamedOutput.error || 'Unknown error';

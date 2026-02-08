@@ -270,9 +270,13 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   const output = await runAgent(group, prompt, chatJid, async (result) => {
     // Streaming output callback — called for each agent result
     if (result.result) {
-      const text = typeof result.result === 'string' ? result.result : JSON.stringify(result.result);
-      logger.info({ group: group.name }, `Agent output: ${text.slice(0, 200)}`);
-      await sendMessage(chatJid, `${ASSISTANT_NAME}: ${text}`);
+      const raw = typeof result.result === 'string' ? result.result : JSON.stringify(result.result);
+      // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
+      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+      logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
+      if (text) {
+        await sendMessage(chatJid, `${ASSISTANT_NAME}: ${text}`);
+      }
     }
 
     if (result.status === 'error') {
@@ -828,6 +832,8 @@ async function connectWhatsApp(): Promise<void> {
         getSessions: () => sessions,
         queue,
         onProcess: (groupJid, proc, containerName, groupFolder) => queue.registerProcess(groupJid, proc, containerName, groupFolder),
+        sendMessage,
+        assistantName: ASSISTANT_NAME,
       });
       startIpcWatcher();
       queue.setProcessMessagesFn(processGroupMessages);
@@ -908,7 +914,7 @@ async function startMessageLoop(): Promise<void> {
           if (!group) continue;
 
           const isMainGroup = group.folder === MAIN_GROUP_FOLDER;
-          const needsTrigger = !isMainGroup && !group.alwaysRespond;
+          const needsTrigger = !isMainGroup && group.requiresTrigger !== false;
 
           // For non-main groups, only act on trigger messages.
           // Non-trigger messages accumulate in DB and get pulled as
