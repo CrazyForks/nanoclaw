@@ -242,8 +242,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   const prompt = formatMessages(missedMessages);
 
-  // Advance cursor immediately so the piping path in startMessageLoop
-  // won't re-fetch these messages via getMessagesSince.
+  // Advance cursor so the piping path in startMessageLoop won't re-fetch
+  // these messages. Save the old cursor so we can roll back on error.
+  const previousCursor = lastAgentTimestamp[chatJid] || '';
   lastAgentTimestamp[chatJid] =
     missedMessages[missedMessages.length - 1].timestamp;
   saveState();
@@ -291,6 +292,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   if (idleTimer) clearTimeout(idleTimer);
 
   if (output === 'error' || hadError) {
+    // Roll back cursor so retries can re-process these messages
+    lastAgentTimestamp[chatJid] = previousCursor;
+    saveState();
+    logger.warn({ group: group.name }, 'Agent error, rolled back message cursor for retry');
     return false;
   }
 
@@ -392,13 +397,19 @@ async function sendMessage(jid: string, text: string): Promise<void> {
   }
 }
 
+let flushing = false;
 async function flushOutgoingQueue(): Promise<void> {
-  if (outgoingQueue.length === 0) return;
-  logger.info({ count: outgoingQueue.length }, 'Flushing outgoing message queue');
-  // Drain a copy so new failures can re-queue
-  const pending = outgoingQueue.splice(0);
-  for (const { jid, text } of pending) {
-    await sendMessage(jid, text);
+  if (flushing || outgoingQueue.length === 0) return;
+  flushing = true;
+  try {
+    logger.info({ count: outgoingQueue.length }, 'Flushing outgoing message queue');
+    // Drain a copy so new failures can re-queue
+    const pending = outgoingQueue.splice(0);
+    for (const { jid, text } of pending) {
+      await sendMessage(jid, text);
+    }
+  } finally {
+    flushing = false;
   }
 }
 
